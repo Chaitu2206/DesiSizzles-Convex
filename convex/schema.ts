@@ -7,6 +7,8 @@ const applicationTables = {
     name: v.string(),
     description: v.string(),
     category: v.string(),
+    menuSection: v.optional(v.string()),
+    menuOrder: v.optional(v.number()),
     price: v.number(),
     isVegetarian: v.boolean(),
     isVegan: v.boolean(),
@@ -22,7 +24,7 @@ const applicationTables = {
     customerPhone: v.string(),
     items: v.array(
       v.object({
-        menuItemId: v.id("menuItems"),
+        menuItemId: v.string(),
         name: v.string(),
         quantity: v.number(),
         price: v.number(),

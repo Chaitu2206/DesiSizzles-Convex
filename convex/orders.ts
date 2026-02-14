@@ -9,7 +9,7 @@ export const createOrder = mutation({
     customerPhone: v.string(),
     items: v.array(
       v.object({
-        menuItemId: v.id("menuItems"),
+        menuItemId: v.string(),
         name: v.string(),
         quantity: v.number(),
         price: v.number(),
