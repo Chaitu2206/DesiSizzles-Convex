@@ -144,6 +144,30 @@ export default function AdminPage() {
     });
   }, [menuSearch, sortedMenuItems]);
 
+  const formatScheduledSlot = (scheduledDate?: string, scheduledTime?: string) => {
+    const rawDate = scheduledDate?.trim();
+    const rawTime = scheduledTime?.trim();
+
+    let formattedDate = "Date not set";
+    if (rawDate) {
+      const parsed = new Date(`${rawDate}T00:00:00`);
+      formattedDate = Number.isNaN(parsed.getTime())
+        ? rawDate
+        : parsed.toLocaleDateString("en-GB", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+          });
+    }
+
+    let formattedTime = "Time not set";
+    if (rawTime) {
+      formattedTime = rawTime.toLowerCase() === "asap" ? "ASAP" : rawTime;
+    }
+
+    return `${formattedDate}, ${formattedTime}`;
+  };
+
   if (user === undefined || isAdmin === undefined) {
     return <div className="py-12 text-center text-gray-600">Loading admin...</div>;
   }
@@ -311,7 +335,6 @@ export default function AdminPage() {
             <h1 className="text-4xl font-bold text-gray-900">Admin Dashboard</h1>
             <p className="text-gray-600 mt-1">Manage orders and menu items.</p>
           </div>
-          <SignOutButton />
         </div>
 
         <section className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
@@ -338,6 +361,12 @@ export default function AdminPage() {
                 </div>
                 <p className="mt-2 text-sm text-gray-700">
                   <span className="font-medium">Address:</span> {order.deliveryAddress}
+                </p>
+                <p className="text-sm text-gray-700">
+                  <span className="font-medium">
+                    {order.orderType === "delivery" ? "Delivery:" : "Pickup:"}
+                  </span>{" "}
+                  {formatScheduledSlot(order.scheduledDate, order.scheduledTime)}
                 </p>
                 {order.specialInstructions && (
                   <p className="text-sm text-gray-700">

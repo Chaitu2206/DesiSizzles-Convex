@@ -7,7 +7,6 @@ import MenuPage from "./components/MenuPage";
 import CateringPage from "./components/CateringPage";
 import ContactPage from "./components/ContactPage";
 import OrderPage from "./components/OrderPage";
-import SeedMenu from "./components/SeedMenu";
 import AdminPage from "./components/AdminPage";
 import { api } from "../convex/_generated/api";
 
@@ -62,7 +61,7 @@ export default function App() {
               className="flex items-center gap-3 cursor-pointer"
               onClick={() => setCurrentPage("home")}
             >
-              <div className="w-12 h-12 bg-[#123b3b] rounded-full flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-[#123b3b] flex items-center justify-center">
                 <span className="text-xl text-[#f3c78f] font-bold">DS</span>
               </div>
               <div>
@@ -251,8 +250,6 @@ export default function App() {
         )}
         {currentPage === "admin" && <AdminPage />}
       </main>
-
-      <SeedMenu />
 
       <footer className="bg-[#123b3b] text-[#f8f2e7] py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

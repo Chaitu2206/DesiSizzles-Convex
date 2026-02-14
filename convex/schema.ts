@@ -31,6 +31,8 @@ const applicationTables = {
       })
     ),
     totalAmount: v.number(),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
     deliveryAddress: v.string(),
     specialInstructions: v.optional(v.string()),
     status: v.string(),

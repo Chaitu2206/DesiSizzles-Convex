@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { toast } from "sonner";
 
 type OrderPageProps = {
@@ -17,6 +17,8 @@ type OrderPageProps = {
 type PlacedOrder = {
   orderId: string;
   placedAt: string;
+  scheduledDate: string;
+  scheduledTime: string;
   customerName: string;
   customerEmail: string;
   customerPhone: string;
@@ -34,6 +36,13 @@ type PlacedOrder = {
   total: number;
 };
 
+type AddressSuggestion = {
+  label: string;
+  lat?: string;
+  lon?: string;
+  kind: "address" | "postcode";
+};
+
 export default function OrderPage({
   cartItems,
   onUpdateQuantity,
@@ -47,6 +56,12 @@ export default function OrderPage({
   const [orderType, setOrderType] = useState<"delivery" | "collection">("delivery");
   const [orderSuccessMessage, setOrderSuccessMessage] = useState<string | null>(null);
   const [placedOrder, setPlacedOrder] = useState<PlacedOrder | null>(null);
+  const [addressQuery, setAddressQuery] = useState("");
+  const [deliveryAddressValue, setDeliveryAddressValue] = useState("");
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<{ lat: string; lon: string } | null>(
+    null,
+  );
   const isOrderLocked = placedOrder !== null;
   const activeItems = placedOrder?.items ?? cartItems;
 
@@ -57,6 +72,123 @@ export default function OrderPage({
   const deliveryFee = orderType === "delivery" ? 3.99 : 0;
   const total = subtotal + deliveryFee;
   const formatCurrency = (value: number) => `\u00A3${value.toFixed(2)}`;
+  const timeOptions = Array.from({ length: 48 }, (_, index) => {
+    const hour24 = Math.floor(index / 2);
+    const minute = index % 2 === 0 ? "00" : "30";
+    const period = hour24 >= 12 ? "PM" : "AM";
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    return `${hour12}:${minute} ${period}`;
+  });
+  const isLikelyPostcodeQuery = (value: string) => /[a-z]/i.test(value) && /\d/.test(value);
+
+  useEffect(() => {
+    if (orderType !== "delivery" || isOrderLocked) return;
+    const query = addressQuery.trim();
+    if (query.length < 3) {
+      setAddressSuggestions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const nominatimRequest = fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=gb&limit=10&q=${encodeURIComponent(
+            query,
+          )}`,
+        );
+        const postcodeAutocompleteRequest = isLikelyPostcodeQuery(query)
+          ? fetch(
+              `https://api.postcodes.io/postcodes/${encodeURIComponent(
+                query.replace(/\s+/g, ""),
+              )}/autocomplete?limit=10`,
+            )
+          : Promise.resolve(null);
+
+        const [nominatimResponse, postcodeResponse] = await Promise.all([
+          nominatimRequest,
+          postcodeAutocompleteRequest,
+        ]);
+
+        const merged: AddressSuggestion[] = [];
+
+        if (postcodeResponse && postcodeResponse.ok) {
+          const postcodePayload = (await postcodeResponse.json()) as {
+            status: number;
+            result: string[] | null;
+          };
+          for (const postcode of postcodePayload.result ?? []) {
+            merged.push({
+              label: postcode,
+              kind: "postcode",
+            });
+          }
+        }
+
+        if (nominatimResponse.ok) {
+          const data = (await nominatimResponse.json()) as Array<{
+            display_name: string;
+            lat: string;
+            lon: string;
+          }>;
+          for (const entry of data) {
+            merged.push({
+              label: entry.display_name,
+              lat: entry.lat,
+              lon: entry.lon,
+              kind: "address",
+            });
+          }
+        }
+
+        const seen = new Set<string>();
+        setAddressSuggestions(
+          merged.filter((entry) => {
+            const key = entry.label.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }),
+        );
+      } catch {
+        setAddressSuggestions([]);
+      }
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [addressQuery, orderType, isOrderLocked]);
+
+  const handleSelectSuggestion = async (suggestion: AddressSuggestion) => {
+    setDeliveryAddressValue(suggestion.label);
+    setAddressQuery(suggestion.label);
+    setAddressSuggestions([]);
+
+    if (suggestion.lat && suggestion.lon) {
+      setSelectedLocation({ lat: suggestion.lat, lon: suggestion.lon });
+      return;
+    }
+
+    if (suggestion.kind === "postcode") {
+      try {
+        const response = await fetch(
+          `https://api.postcodes.io/postcodes/${encodeURIComponent(
+            suggestion.label.replace(/\s+/g, ""),
+          )}`,
+        );
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          status: number;
+          result: { latitude: number; longitude: number } | null;
+        };
+        if (!payload.result) return;
+        setSelectedLocation({
+          lat: String(payload.result.latitude),
+          lon: String(payload.result.longitude),
+        });
+      } catch {
+        // Ignore map lookup failures and keep selected address.
+      }
+    }
+  };
 
   const openWhatsAppWithOrder = (payload: {
     customerName: string;
@@ -122,6 +254,9 @@ export default function OrderPage({
     const customerName = formData.get("name") as string;
     const customerEmail = formData.get("email") as string;
     const customerPhone = formData.get("phone") as string;
+    const scheduledDate =
+      ((formData.get("scheduledDate") as string) || new Date().toISOString().split("T")[0]).trim();
+    const scheduledTime = ((formData.get("scheduledTime") as string) || "ASAP").trim();
     const deliveryAddress =
       orderType === "delivery" ? (formData.get("address") as string) : "Collection";
     const specialInstructions = (formData.get("instructions") as string) || undefined;
@@ -132,12 +267,14 @@ export default function OrderPage({
         customerEmail,
         customerPhone,
         items: activeItems.map((item) => ({
-          menuItemId: item.id as any,
+          menuItemId: String(item.id),
           name: item.name,
           quantity: item.quantity,
           price: item.price,
         })),
         totalAmount: total,
+        scheduledDate,
+        scheduledTime,
         deliveryAddress,
         specialInstructions,
         orderType,
@@ -148,6 +285,8 @@ export default function OrderPage({
       setPlacedOrder({
         orderId: String(orderId),
         placedAt: new Date().toISOString(),
+        scheduledDate,
+        scheduledTime,
         customerName,
         customerEmail,
         customerPhone,
@@ -160,7 +299,9 @@ export default function OrderPage({
         total,
       });
     } catch (error) {
-      toast.error("Failed to place order. Please try again.");
+      const message =
+        error instanceof Error ? error.message : "Failed to place order. Please try again.";
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -182,6 +323,9 @@ export default function OrderPage({
                 <p className="text-sm text-gray-600">Order ID: {placedOrder.orderId}</p>
                 <p className="text-sm text-gray-600">
                   Placed At: {new Date(placedOrder.placedAt).toLocaleString()}
+                </p>
+                <p className="text-sm text-gray-600">
+                  Requested Slot: {placedOrder.scheduledDate} at {placedOrder.scheduledTime}
                 </p>
               </div>
               <div className="text-right text-sm text-gray-700">
@@ -352,6 +496,7 @@ export default function OrderPage({
                       🏪 Collection
                     </button>
                   </div>
+
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4">
@@ -397,8 +542,71 @@ export default function OrderPage({
                     />
                   </div>
 
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        {orderType === "delivery" ? "Delivery Date *" : "Pickup Date *"}
+                      </label>
+                      <input
+                        type="date"
+                        name="scheduledDate"
+                        required
+                        min={new Date().toISOString().split("T")[0]}
+                        disabled={isOrderLocked}
+                        className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        {orderType === "delivery" ? "Delivery Time *" : "Pickup Time *"}
+                      </label>
+                      <select
+                        name="scheduledTime"
+                        required
+                        defaultValue=""
+                        disabled={isOrderLocked}
+                        className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition-all"
+                      >
+                        <option value="" disabled>
+                          Select time
+                        </option>
+                        {timeOptions.map((time) => (
+                          <option key={time} value={time}>
+                            {time}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
                   {orderType === "delivery" && (
                     <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Search Address / Postcode
+                      </label>
+                      <input
+                        type="text"
+                        disabled={isOrderLocked}
+                        value={addressQuery}
+                        onChange={(e) => setAddressQuery(e.target.value)}
+                        className="w-full px-4 py-3 mb-2 rounded-lg border border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition-all"
+                        placeholder="Start typing address or postcode"
+                      />
+                      {addressSuggestions.length > 0 && (
+                        <div className="mb-2 max-h-44 overflow-auto rounded-lg border border-gray-200 bg-white">
+                          {addressSuggestions.map((suggestion) => (
+                            <button
+                              key={`${suggestion.kind}-${suggestion.label}`}
+                              type="button"
+                              disabled={isOrderLocked}
+                              onClick={() => void handleSelectSuggestion(suggestion)}
+                              className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-orange-50 border-b border-gray-100 last:border-b-0"
+                            >
+                              {suggestion.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <label className="block text-sm font-semibold text-gray-700 mb-2">
                         Delivery Address *
                       </label>
@@ -406,10 +614,26 @@ export default function OrderPage({
                         name="address"
                         required
                         disabled={isOrderLocked}
+                        value={deliveryAddressValue}
+                        onChange={(e) => setDeliveryAddressValue(e.target.value)}
                         rows={3}
                         className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition-all"
                         placeholder="Full delivery address including postcode"
                       ></textarea>
+                      {selectedLocation && (
+                        <div className="mt-3 rounded-lg overflow-hidden border border-gray-200">
+                          <iframe
+                            title="Selected delivery location"
+                            className="w-full h-56"
+                            loading="lazy"
+                            src={`https://www.openstreetmap.org/export/embed.html?bbox=${Number(
+                              selectedLocation.lon,
+                            ) - 0.01}%2C${Number(selectedLocation.lat) - 0.01}%2C${Number(
+                              selectedLocation.lon,
+                            ) + 0.01}%2C${Number(selectedLocation.lat) + 0.01}&layer=mapnik&marker=${selectedLocation.lat}%2C${selectedLocation.lon}`}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
