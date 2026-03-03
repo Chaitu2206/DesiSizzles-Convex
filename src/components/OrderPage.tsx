@@ -80,6 +80,8 @@ export default function OrderPage({
     return `${hour12}:${minute} ${period}`;
   });
   const isLikelyPostcodeQuery = (value: string) => /[a-z]/i.test(value) && /\d/.test(value);
+  const isFullUkPostcode = (value: string) =>
+    /^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/i.test(value.trim());
 
   useEffect(() => {
     if (orderType !== "delivery" || isOrderLocked) return;
@@ -91,11 +93,43 @@ export default function OrderPage({
 
     const timer = window.setTimeout(async () => {
       try {
+        const postcodeFormatted = query.toUpperCase().replace(/\s+/g, " ").trim();
+        const postcodeCompact = postcodeFormatted.replace(/\s+/g, "");
+        const postcodeOutward = postcodeCompact.slice(0, -3);
+        const postcodeInward = postcodeCompact.slice(-3);
+        const escapedOutward = postcodeOutward.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const escapedInward = postcodeInward.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const postcodeRegex = `^${escapedOutward}\\s*${escapedInward}$`;
+
         const nominatimRequest = fetch(
           `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=gb&limit=10&q=${encodeURIComponent(
             query,
           )}`,
         );
+        const postcodePremisesRequest = isFullUkPostcode(postcodeFormatted)
+          ? fetch("https://overpass-api.de/api/interpreter", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+              },
+              body: `data=${encodeURIComponent(
+                `[out:json][timeout:25];
+(
+  node["addr:postcode"~"${postcodeRegex}", i]["addr:street"];
+  way["addr:postcode"~"${postcodeRegex}", i]["addr:street"];
+  relation["addr:postcode"~"${postcodeRegex}", i]["addr:street"];
+);
+out center tags;`,
+              )}`,
+            })
+          : Promise.resolve(null);
+        const postcodeAddressRequest = isLikelyPostcodeQuery(query)
+          ? fetch(
+              `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=gb&limit=25&postalcode=${encodeURIComponent(
+                postcodeFormatted,
+              )}&country=${encodeURIComponent("United Kingdom")}`,
+            )
+          : Promise.resolve(null);
         const postcodeAutocompleteRequest = isLikelyPostcodeQuery(query)
           ? fetch(
               `https://api.postcodes.io/postcodes/${encodeURIComponent(
@@ -104,14 +138,79 @@ export default function OrderPage({
             )
           : Promise.resolve(null);
 
-        const [nominatimResponse, postcodeResponse] = await Promise.all([
-          nominatimRequest,
-          postcodeAutocompleteRequest,
-        ]);
+        const [nominatimResponse, postcodePremisesResponse, postcodeAddressResponse, postcodeResponse] =
+          await Promise.all([
+            nominatimRequest,
+            postcodePremisesRequest,
+            postcodeAddressRequest,
+            postcodeAutocompleteRequest,
+          ]);
 
         const merged: AddressSuggestion[] = [];
+        let postcodeAddressCount = 0;
 
-        if (postcodeResponse && postcodeResponse.ok) {
+        if (postcodePremisesResponse && postcodePremisesResponse.ok) {
+          const postcodePremisesPayload = (await postcodePremisesResponse.json()) as {
+            elements: Array<{
+              lat?: number;
+              lon?: number;
+              center?: { lat: number; lon: number };
+              tags?: Record<string, string>;
+            }>;
+          };
+
+          for (const element of postcodePremisesPayload.elements ?? []) {
+            const tags = element.tags ?? {};
+            const lineOne = [tags["addr:housename"], tags["addr:housenumber"], tags["addr:street"]]
+              .filter(Boolean)
+              .join(" ")
+              .trim();
+            if (!lineOne) continue;
+
+            const locality = [
+              tags["addr:suburb"],
+              tags["addr:city"],
+              tags["addr:district"],
+              tags["addr:county"],
+            ]
+              .filter(Boolean)
+              .join(", ");
+
+            const label = `${lineOne}${locality ? `, ${locality}` : ""}, ${postcodeFormatted}, United Kingdom`;
+            const lat = element.lat ?? element.center?.lat;
+            const lon = element.lon ?? element.center?.lon;
+            if (lat == null || lon == null) continue;
+
+            merged.push({
+              label,
+              lat: String(lat),
+              lon: String(lon),
+              kind: "address",
+            });
+            postcodeAddressCount += 1;
+          }
+        }
+
+        if (postcodeAddressResponse && postcodeAddressResponse.ok) {
+          const postcodeAddressPayload = (await postcodeAddressResponse.json()) as Array<{
+            display_name: string;
+            lat: string;
+            lon: string;
+          }>;
+          for (const entry of postcodeAddressPayload) {
+            merged.push({
+              label: entry.display_name,
+              lat: entry.lat,
+              lon: entry.lon,
+              kind: "address",
+            });
+            if (isFullUkPostcode(postcodeFormatted)) {
+              postcodeAddressCount += 1;
+            }
+          }
+        }
+
+        if (postcodeResponse && postcodeResponse.ok && postcodeAddressCount === 0) {
           const postcodePayload = (await postcodeResponse.json()) as {
             status: number;
             result: string[] | null;
