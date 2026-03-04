@@ -9,13 +9,15 @@ export const createOrder = mutation({
     customerPhone: v.string(),
     items: v.array(
       v.object({
-        menuItemId: v.id("menuItems"),
+        menuItemId: v.string(),
         name: v.string(),
         quantity: v.number(),
         price: v.number(),
       })
     ),
     totalAmount: v.number(),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
     deliveryAddress: v.string(),
     specialInstructions: v.optional(v.string()),
     orderType: v.string(),
@@ -30,6 +32,8 @@ export const createOrder = mutation({
       customerPhone: args.customerPhone,
       items: args.items,
       totalAmount: args.totalAmount,
+      scheduledDate: args.scheduledDate ?? new Date().toISOString().split("T")[0],
+      scheduledTime: args.scheduledTime ?? "ASAP",
       deliveryAddress: args.deliveryAddress,
       specialInstructions: args.specialInstructions,
       status: "pending",
